@@ -163,6 +163,36 @@ def test__irradiance_times():
         )
 
 
+@pytest.mark.parametrize("_surface_altitude", [0.0, "surface_altitude"])
+@pytest.mark.parametrize("_linke_turbidity", [3.0, "linke_turbidity"])
+def test__calc_clearsky_solar_radiation_data(
+    request, target_grid, _surface_altitude, _linke_turbidity
+):
+
+    if isinstance(_surface_altitude, str):
+        _surface_altitude = request.getfixturevalue(_surface_altitude).data
+    if isinstance(_linke_turbidity, str):
+        _linke_turbidity = request.getfixturevalue(_linke_turbidity).data
+
+    irradiance_times = np.array(
+        [
+            datetime(2021, 12, 31, 21, 00, tzinfo=timezone.utc),
+            datetime(2021, 12, 31, 22, 00, tzinfo=timezone.utc),
+            datetime(2021, 12, 31, 23, 00, tzinfo=timezone.utc),
+            datetime(2022, 1, 1, 00, 00, tzinfo=timezone.utc),
+        ]
+    )
+
+    result = GenerateClearskySolarRadiation()._calc_clearsky_solar_radiation_data(
+        target_grid, irradiance_times, _surface_altitude, _linke_turbidity, 30
+    )
+    # Check expected array properties
+    assert result.shape == (10, 8)
+    assert result.dtype == np.float32
+    # Check results are sensible
+    assert np.all(np.isfinite(result))
+    assert np.all(result >= 0.0)
+
 @pytest.mark.parametrize("at_mean_sea_level", (True, False))
 def test__create_solar_radiation_cube(target_grid, at_mean_sea_level):
 
