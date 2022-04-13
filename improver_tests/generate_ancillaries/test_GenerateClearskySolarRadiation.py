@@ -42,6 +42,8 @@ from improver.generate_ancillaries.generate_derived_solar_fields import (
 )
 from improver.synthetic_data.set_up_test_cubes import set_up_variable_cube
 
+MAX_EXTRA_TERRESTRIAL_IRRADIANCE = 1367.7 * (1 + 0.033)
+
 
 @pytest.fixture
 def target_grid() -> Cube:
@@ -191,7 +193,7 @@ def test__calc_clearsky_solar_radiation_data(
     assert result.dtype == np.float32
     # Check results are sensible
     assert np.all(np.isfinite(result))
-    assert np.all(result >= 0.0)
+    assert np.all((result >= 0.0) * (result < MAX_EXTRA_TERRESTRIAL_IRRADIANCE))
 
 @pytest.mark.parametrize("at_mean_sea_level", (True, False))
 def test__create_solar_radiation_cube(target_grid, at_mean_sea_level):
