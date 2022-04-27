@@ -42,8 +42,6 @@ from improver.generate_ancillaries.generate_derived_solar_fields import (
 )
 from improver.synthetic_data.set_up_test_cubes import set_up_variable_cube
 
-MAX_EXTRA_TERRESTRIAL_IRRADIANCE = 1367.7 * (1 + 0.033)
-
 
 @pytest.fixture
 def target_grid() -> Cube:
@@ -165,6 +163,33 @@ def test__irradiance_times():
         )
 
 
+def test__calc_air_mass():
+    """Test calc air mass function over a range of zenith angles."""
+    zenith = np.array(
+        [-100.0, -90.0, -85.0, -60.0, -30.0, 0.0, 30.0, 60.0, 85.0, 90, 100]
+    )
+    values = GenerateClearskySolarRadiation()._calc_air_mass(zenith)
+
+    # These values have been evaluated by hand
+    expected_values = np.array(
+        [
+            0.0,
+            0.0,
+            11.46028,
+            1.99948,
+            1.15445,
+            0.99971,
+            1.15399,
+            1.99429,
+            10.30579,
+            0.0,
+            0.0,
+        ]
+    )
+
+    assert np.allclose(values, expected_values)
+
+
 @pytest.mark.parametrize("_surface_altitude", [0.0, "surface_altitude"])
 @pytest.mark.parametrize("_linke_turbidity", [3.0, "linke_turbidity"])
 def test__calc_clearsky_solar_radiation_data(
@@ -193,7 +218,7 @@ def test__calc_clearsky_solar_radiation_data(
     assert result.dtype == np.float32
     # Check results are sensible
     assert np.all(np.isfinite(result))
-    assert np.all((result >= 0.0) * (result < MAX_EXTRA_TERRESTRIAL_IRRADIANCE))
+    assert np.all(result >= 0.0)
 
 @pytest.mark.parametrize("at_mean_sea_level", (True, False))
 def test__create_solar_radiation_cube(target_grid, at_mean_sea_level):
