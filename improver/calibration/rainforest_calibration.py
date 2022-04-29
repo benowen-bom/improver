@@ -31,8 +31,11 @@
 """RainForests calibration Plugins."""
 
 import warnings
+from typing import Any, List, Tuple, Optional
 
 import numpy as np
+
+from iris.coords import DimCoord
 from iris.cube import Cube, CubeList
 
 from improver import BasePlugin, PostProcessingPlugin
@@ -125,6 +128,22 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
 
         self.error_thresholds = np.array(error_thresholds, dtype=np.float32)
 
+    def _check_num_features(self, features: CubeList) -> None:
+        """Check that the correct number of features has been passed into the model."""
+        sample_tree_model = self.tree_models[0]
+        if self.treelite_enabled:
+            from treelite_runtime import Predictor
+            if isinstance(sample_tree_model, Predictor):
+                expected_num_features = sample_tree_model.num_feature
+            else:
+                expected_num_features = sample_tree_model.num_feature()
+        else:
+            expected_num_features = sample_tree_model.num_feature()
+
+        if expected_num_features != len(features):
+            raise ValueError("Number of expected features does not match number of feature cubes.")
+
+
     def process(
         self,
         forecast_cube: Cube,
@@ -167,4 +186,21 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         Returns:
             The calibrated forecast cube.
         """
-        pass
+        # Check that tree-model object available for each error threshold.
+        if len(self.error_thresholds) != len(self.tree_models):
+            raise ValueError("tree_models must be of the same size as error_thresholds.")
+
+        # Check that the correct number of feature variables has been supplied.
+        self._check_num_features(feature_cubes)
+
+        # Align forecast and feature datasets
+
+        # Evaluate the error CDF using tree-models.
+
+        # Extract error percentiles from error CDF.
+
+        # Apply error to forecast cube.
+
+        # Combine sub-ensembles into a single consolidated ensemble.
+
+
