@@ -41,8 +41,10 @@ from numpy import ndarray
 from pandas import DataFrame
 
 from improver import BasePlugin, PostProcessingPlugin
+from improver.cli import generate_percentiles
 from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
     ConvertProbabilitiesToPercentiles,
+    RebadgePercentilesAsRealizations,
 )
 from improver.ensemble_copula_coupling.utilities import choose_set_of_percentiles
 from improver.metadata.utilities import (
@@ -335,9 +337,6 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         Args:
             forecast_cube:
                 Cube containing the forecast to be calibrated.
-            error_thresholds:
-                Error thresholds corresponding to at which error probabilities are
-                to be evaluated using the tree models.
 
         Returns:
             An empty probability cube.
@@ -399,9 +398,7 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         return features_df
 
     def _get_error_probabilities(
-        self,
-        forecast_cube: Cube,
-        feature_cubes: CubeList,
+        self, forecast_cube: Cube, feature_cubes: CubeList,
     ) -> Cube:
         """Evaluate the error exceedence probabilities for forecast_cube from tree_models and
         the associated feature_cubes.
@@ -421,12 +418,11 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
                 treelite_runtime Predictor (if treelite dependency is available).
         """
         from lightgbm import Booster
+
         if self.treelite_enabled:
             from treelite_runtime import DMatrix, Predictor
 
-        error_probability_cube = self._prepare_error_probability_cube(
-            forecast_cube, self.error_thresholds
-        )
+        error_probability_cube = self._prepare_error_probability_cube(forecast_cube)
 
         features_df = self._prepare_features_dataframe(feature_cubes)
 
@@ -466,7 +462,7 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
 
         Args:
             error_probability_cube:
-
+                A cube containing error exceedence probabilities.
             error_percentiles_count:
                 The number of error percentiles to extract. The resulting percentiles
                 will be evenly spaced on the interval (0, 100).
@@ -518,6 +514,115 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
             optional_attributes=forecast_cube.attributes,
             data=forecast_subensembles_data,
         )
+
+    def _stack_subensembles(self, forecast_subensembles: Cube) -> Cube:
+        """Stacking the realization and percentile dimensions in forecast_subensemble
+        into a single realization dimension. Realization and percentile are assumed to
+        be the first and second dimensions respectively.
+
+        Args:
+            input_cube:
+                Cube containing the forecast_subensembles.
+
+        Returns:
+            Cube containing single realization dimension in place of the realization
+            and percentile dimensions in forecast_subensemble.
+
+        Raises:
+            ValueError:
+                if realization and percentile are not the first and second
+                dimensions.
+        """
+        realization_percentile_dims = (
+            *forecast_subensembles.coord_dims("realization"),
+            *forecast_subensembles.coord_dims("percentile"),
+        )
+        if realization_percentile_dims != (0, 1):
+            raise ValueError("Invalid dimension coordinate ordering.")
+        realization_size = len(forecast_subensembles.coord("realization").points)
+        percentile_size = len(forecast_subensembles.coord("percentile").points)
+        new_realization_coord = DimCoord(
+            points=np.arange(realization_size * percentile_size, dtype=np.int32),
+            standard_name="realization",
+            units="1",
+        )
+        # As we are stacking the first two dimensions, we need to subtract 1 from all
+        # dimension position values.
+        dim_coords_and_dims = [(new_realization_coord, 0)]
+        dim_coords = forecast_subensembles.coords(dim_coords=True)
+        for coord in dim_coords:
+            if coord.name() not in ["realization", "percentile"]:
+                dims = tuple(
+                    d - 1 for d in forecast_subensembles.coord_dims(coord.name())
+                )
+                dim_coords_and_dims.append((coord, dims))
+        aux_coords_and_dims = []
+        aux_coords = forecast_subensembles.coords(dim_coords=False)
+        for coord in aux_coords:
+            dims = tuple(d - 1 for d in forecast_subensembles.coord_dims(coord.name()))
+            aux_coords_and_dims.append((coord, dims))
+        # Stack the first two dimensions.
+        superensemble_data = np.reshape(
+            forecast_subensembles.data, (-1,) + forecast_subensembles.data.shape[2:]
+        )
+        superensemble_cube = Cube(
+            superensemble_data,
+            standard_name=forecast_subensembles.standard_name,
+            long_name=forecast_subensembles.long_name,
+            var_name=forecast_subensembles.var_name,
+            units=forecast_subensembles.units,
+            dim_coords_and_dims=dim_coords_and_dims,
+            aux_coords_and_dims=aux_coords_and_dims,
+            attributes=forecast_subensembles.attributes,
+        )
+        return superensemble_cube
+
+    def _combine_subensembles(
+        self, forecast_subensembles: Cube, output_realizations_count: int
+    ) -> Cube:
+        """Combine the forecast sub-ensembles into a single ensemble. This is done by
+        first stacking the sub-ensembles into a single super-ensemble and then resampling
+        the super-ensemble to produce a subset of output realizations.
+
+        Args:
+            forecast_subensembles:
+                Cube containing a series of forecast sub-ensembles.
+            output_realizations_count:
+                The number of ensemble realizations that will be extracted from the
+                super-ensemble. If realizations_count is None, all realizations will
+                be returned.
+
+        Returns:
+            Cube containing single realization dimension.
+        """
+        print("Flattening ensemble dimensions")
+        superensemble_cube = self._stack_subensembles(forecast_subensembles)
+
+        if output_realizations_count is None:
+            warnings.warn(
+                Warning(
+                    "output_realizations_count not specified. Returning all realizations from the "
+                    "full super-ensemble."
+                )
+            )
+            return superensemble_cube
+
+        print(superensemble_cube)
+
+        print(
+            "Remapping to subset of realizations specified by output_realizations_count."
+        )
+        output_percentiles = choose_set_of_percentiles(
+            output_realizations_count, sampling="quantile",
+        )
+        percentile_cube = generate_percentiles.process(
+            superensemble_cube,
+            coordinates="realization",
+            percentiles=output_percentiles,
+        )
+        reduced_ensemble = RebadgePercentilesAsRealizations()(percentile_cube)
+
+        return reduced_ensemble
 
     def process(
         self,
@@ -581,9 +686,7 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         )
 
         # Evaluate the error CDF using tree-models.
-        error_CDF = self._get_error_probabilities(
-            aligned_forecast, aligned_features
-        )
+        error_CDF = self._get_error_probabilities(aligned_forecast, aligned_features)
 
         # Extract error percentiles from error CDF.
         error_percentiles = self._extract_error_percentiles(
@@ -594,5 +697,10 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         forecast_subensembles = self._apply_error_to_forecast(
             aligned_forecast, error_percentiles
         )
-        forecast_subensembles
+
         # Combine sub-ensembles into a single consolidated ensemble.
+        calibrated_output = self._combine_subensembles(
+            forecast_subensembles, output_realizations_count
+        )
+
+        return calibrated_output
