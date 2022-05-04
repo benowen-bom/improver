@@ -34,15 +34,56 @@ import warnings
 from typing import Optional, Tuple
 
 import numpy as np
+import pandas as pd
 from iris.coords import DimCoord
 from iris.cube import Cube, CubeList
+from numpy import ndarray
+from pandas import DataFrame
 
 from improver import BasePlugin, PostProcessingPlugin
+from improver.ensemble_copula_coupling.ensemble_copula_coupling import (
+    ConvertProbabilitiesToPercentiles,
+)
+from improver.ensemble_copula_coupling.utilities import choose_set_of_percentiles
+from improver.metadata.utilities import (
+    create_new_diagnostic_cube,
+    generate_mandatory_attributes,
+)
 from improver.utilities.cube_manipulation import compare_coords
 
 # Passed to choose_set_of_percentiles to set of evenly spaced percentiles
 DEFAULT_ERROR_PERCENTILES_COUNT = 19
 DEFAULT_OUTPUT_REALIZATIONS_COUNT = 100
+
+
+def make_increasing(input_array: ndarray) -> ndarray:
+    """Make np.arry monotone increasing in the first dimension.
+
+    Args:
+        input_array: the array to make monotone
+
+    Returns:
+        array: an array of same shape as the input, where np.diff(axis=0)
+        is non-negative
+    """
+    upper = np.maximum.accumulate(input_array, axis=0)
+    lower = np.flip(np.minimum.accumulate(np.flip(input_array, axis=0), axis=0), axis=0)
+    return 0.5 * (upper + lower)
+
+
+def make_decreasing(input_array: ndarray) -> ndarray:
+    """Make np.arry monotone decreasing in the first dimension.
+
+    Args:
+        input_array: the array to make monotone
+
+    Returns:
+        array: an array of same shape as the input, where np.diff(axis=0)
+        is non-negative
+    """
+    lower = np.minimum.accumulate(input_array, axis=0)
+    upper = np.flip(np.maximum.accumulate(np.flip(input_array, axis=0), axis=0), axis=0)
+    return 0.5 * (upper + lower)
 
 
 class TrainRainForestsTreeModels(BasePlugin):
@@ -78,7 +119,6 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
                     "lightgbm_model" : "<path_to_lightgbm_model_object>",
                     "treelite_model" : "<path_to_treelite_model_object>"
                 }
-            }
 
         The keys specify the error threshold value, while the associated values
         are the path to the corresponding tree-model objects for that threshold.
@@ -288,6 +328,161 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
 
         return aligned_cubes[:-1], aligned_cubes[-1]
 
+    def _prepare_error_probability_cube(self, forecast_cube):
+        """Initialise a cube with the same dimensions as the input forecast_cube,
+        with an additional threshold dimension added as the leading dimension.
+
+        Args:
+            forecast_cube:
+                Cube containing the forecast to be calibrated.
+            error_thresholds:
+                Error thresholds corresponding to at which error probabilities are
+                to be evaluated using the tree models.
+
+        Returns:
+            An empty probability cube.
+        """
+        # Create a template for error CDF, with threshold the leading dimension.
+        error_probability_cube = create_new_diagnostic_cube(
+            name=f"probability_of_forecast_error_of_{forecast_cube.name()}_above_threshold",
+            units="1",
+            template_cube=forecast_cube,
+            mandatory_attributes=generate_mandatory_attributes([forecast_cube]),
+        )
+        threshold_coord = DimCoord(
+            self.error_thresholds,
+            long_name="threshold",
+            units=forecast_cube.units,
+            attributes={"spp__relative_to_threshold": "above"},
+        )
+        error_probability_cube = self._add_coordinate_to_cube(
+            error_probability_cube,
+            threshold_coord,
+            new_dim_location=0,
+            copy_metadata=True,
+        )
+
+        return error_probability_cube
+
+    def _prepare_features_dataframe(self, feature_cubes: Cube) -> DataFrame:
+        """Convert gridded feature cubes into a dataframe, with feature variables
+        sorted alphabettically.
+
+        Args:
+            feature_cubes:
+                Cubelist containing the independent feature variables for prediction.
+
+        Returns:
+            Dataframe containing flattened feature variables.
+
+        Raises:
+            ValueError:
+                If flattened cubes have differing length.
+        """
+        # Get the names of features and sort alphabetically
+        feature_variables = [cube.name() for cube in feature_cubes]
+        feature_variables.sort()
+
+        # Unpack the cube-data into dataframe to feed into the tree-models.
+        features_df = pd.DataFrame()
+        for feature in feature_variables:
+            cube = feature_cubes.extract_cube(feature)
+            print(cube.name(), cube.units)
+            print(f"Flattening: {cube.name()}")
+            data = cube.data.flatten()
+            if (len(features_df) > 0) and (len(data) != len(features_df)):
+                raise RuntimeError("Input cubes have differing sizes.")
+            features_df[feature] = data
+
+        print(f"Cube -> dataframe complete: \n{features_df.dtypes}")
+
+        return features_df
+
+    def _get_error_probabilities(
+        self,
+        forecast_cube: Cube,
+        feature_cubes: CubeList,
+    ) -> Cube:
+        """Evaluate the error exceedence probabilities for forecast_cube from tree_models and
+        the associated feature_cubes.
+
+        Args:
+            forecast_cube:
+                Cube containing the variable to be calibrated.
+            feature_cubes:
+                Cubelist containing the independent feature variables for prediction.
+
+        Returns:
+            A cube containing error exceedence probabilities.
+
+        Raises:
+            ValueError:
+                If an unsupported model object is passed. Expects lightgbm Booster, or
+                treelite_runtime Predictor (if treelite dependency is available).
+        """
+        from lightgbm import Booster
+        if self.treelite_enabled:
+            from treelite_runtime import DMatrix, Predictor
+
+        error_probability_cube = self._prepare_error_probability_cube(
+            forecast_cube, self.error_thresholds
+        )
+
+        features_df = self._prepare_features_dataframe(feature_cubes)
+
+        if isinstance(self.tree_models[0], Booster):
+            print("Using light-gbm model:")
+            # Use GBDT models for calculation.
+            input_dataset = features_df
+        elif self.treelite_enabled:
+            if isinstance(self.tree_models[0], Predictor):
+                print("Using treelite model:")
+                # Use treelite models for calculation.
+                input_dataset = DMatrix(features_df.values)
+            else:
+                raise ValueError("Unsupported model object passed.")
+        else:
+            raise ValueError("Unsupported model object passed.")
+
+        for threshold_index, model in enumerate(self.tree_models):
+            print(
+                f"Calculating Pr(error > {self.error_thresholds[threshold_index]:0.4f} mm)"
+            )
+            prediction = model.predict(input_dataset)
+            error_probability_cube.data[threshold_index, ...] = np.reshape(
+                prediction, forecast_cube.data.shape
+            )
+            print(f"min: {prediction.min()}, max: {prediction.max()}")
+
+        print("Enforcing monotonicity.")
+        error_probability_cube.data = make_decreasing(error_probability_cube.data)
+
+        return error_probability_cube
+
+    def _extract_error_percentiles(
+        self, error_probability_cube, error_percentiles_count
+    ):
+        """Extract error percentile values from the error exceedence probabilities.
+
+        Args:
+            error_probability_cube:
+
+            error_percentiles_count:
+                The number of error percentiles to extract. The resulting percentiles
+                will be evenly spaced on the interval (0, 100).
+
+        Returns:
+
+        """
+        error_percentiles = choose_set_of_percentiles(
+            error_percentiles_count, sampling="quantile",
+        )
+        error_percentiles_cube = ConvertProbabilitiesToPercentiles().process(
+            error_probability_cube, percentiles=error_percentiles
+        )
+
+        return error_percentiles_cube
+
     def process(
         self,
         forecast_cube: Cube,
@@ -345,8 +540,15 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         )
 
         # Evaluate the error CDF using tree-models.
+        error_CDF = self._get_error_probabilities(
+            aligned_forecast, aligned_features
+        )
 
         # Extract error percentiles from error CDF.
+        error_percentiles = self._extract_error_percentiles(
+            error_CDF, error_percentiles_count
+        )
+        error_percentiles
 
         # Apply error to forecast cube.
 
