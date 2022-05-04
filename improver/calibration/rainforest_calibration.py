@@ -472,7 +472,7 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
                 will be evenly spaced on the interval (0, 100).
 
         Returns:
-
+            Cube containing percentile values for the error distributions.
         """
         error_percentiles = choose_set_of_percentiles(
             error_percentiles_count, sampling="quantile",
@@ -482,6 +482,42 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         )
 
         return error_percentiles_cube
+
+    def _apply_error_to_forecast(
+        self, forecast_cube: Cube, error_percentiles_cube: Cube
+    ) -> Cube:
+        """Apply the error distributions (as error percentiles) to the forecast cube. The result
+        is a series (sub-ensemble) of values for each forecast realization.
+
+        Args:
+            forecast_cube:
+                Cube containing the forecast to be calibrated.
+            error_percentiles_cube:
+                Cube containing percentile values for the error distributions.
+        Returns:
+            Cube containing the forecast sub-ensembles.
+        """
+        # Apply the error_percentiles to the forecast_cube
+        forecast_subensembles_data = (
+            forecast_cube.data[:, np.newaxis] + error_percentiles_cube.data
+        )
+        # Negative can values arise when the forecast is between error thresholds.
+        # When there is a lower bound on the observable value (0.0 in the case of rainfall),
+        # error thresholds below the forecast value should have probability of exceedence
+        # of 1, however it is possible that when forecast value is between thresholds that
+        # the linear interpolation in mapping from probabilities to percentiles, can give
+        # percentile values that lie below the forecast value. Consequently, when applied
+        # to the forecast, these result in negative values in the sub-ensemble.
+        forecast_subensembles_data = np.maximum(0.0, forecast_subensembles_data)
+        # Return cube containing forecast subensembles
+        return create_new_diagnostic_cube(
+            name=forecast_cube.name(),
+            units=forecast_cube.units,
+            template_cube=error_percentiles_cube,
+            mandatory_attributes=generate_mandatory_attributes([forecast_cube]),
+            optional_attributes=forecast_cube.attributes,
+            data=forecast_subensembles_data,
+        )
 
     def process(
         self,
@@ -524,6 +560,11 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
 
         Returns:
             The calibrated forecast cube.
+
+        Raises:
+            ValueError:
+                If the number of tree-models is inconsistent with the number of error
+                thresholds.
         """
         # Check that tree-model object available for each error threshold.
         if len(self.error_thresholds) != len(self.tree_models):
@@ -548,8 +589,10 @@ class ApplyRainForestsCalibration(PostProcessingPlugin):
         error_percentiles = self._extract_error_percentiles(
             error_CDF, error_percentiles_count
         )
-        error_percentiles
 
         # Apply error to forecast cube.
-
+        forecast_subensembles = self._apply_error_to_forecast(
+            aligned_forecast, error_percentiles
+        )
+        forecast_subensembles
         # Combine sub-ensembles into a single consolidated ensemble.
