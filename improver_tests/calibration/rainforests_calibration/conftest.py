@@ -30,7 +30,9 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Fixtures for rainforests calibration."""
 import numpy as np
+import pandas as pd
 import pytest
+from iris import Constraint
 from iris.cube import CubeList
 
 from improver.synthetic_data.set_up_test_cubes import set_up_variable_cube
@@ -112,8 +114,8 @@ def gen_feature_cubes(realizations):
     )
     clearsky_solar_rad = set_up_variable_cube(
         np.maximum(0, np.random.normal(5000000, 2000000, (10, 10))).astype(np.float32),
-        name="clearsky_solar_radiation",
-        units="J m-2",
+        name="integral_of_surface_downwelling_shortwave_flux_in_air_assuming_clear_sky_wrt_time",
+        units="W s m-2",
     )
     return CubeList(
         [
@@ -144,3 +146,89 @@ def deterministic_forecast():
 @pytest.fixture
 def deterministic_features():
     return gen_feature_cubes(realizations=None)
+
+
+def get_dummy_training_data(features, forecast):
+
+    # Set column names for reference in training
+    fcst_column = forecast.name()
+    obs_column = fcst_column + "_obs"
+    train_columns = [cube.name() for cube in features]
+    train_columns.sort()
+
+    training_data = pd.DataFrame()
+    # Initialise feature variables
+    for cube in (*features, forecast):
+        # Initialise forecast variable
+        if cube.coords("realization"):
+            training_data[cube.name()] = cube.extract(
+                Constraint(realization=0)
+            ).data.flatten()
+        else:
+            training_data[cube.name()] = cube.data.flatten()
+    # mock y data so that it is correlated with predicted precipitation_accumulation
+    # and other variables, with some noise
+    non_target_columns = list(set(training_data.columns) - set(list(fcst_column)))
+    rng = np.random.default_rng(0)
+    training_data[obs_column] = (
+        training_data[fcst_column] + training_data[non_target_columns].sum(axis=1) / 5
+    )
+    training_data[obs_column] += rng.normal(
+        0, training_data[obs_column].std(), len(training_data)
+    )
+    # rescale to have same mean and standard deviation as prediction
+    training_data[obs_column] = (
+        training_data[obs_column] - training_data[obs_column].mean()
+    ) / training_data[obs_column].std()
+    training_data[obs_column] = (
+        training_data[obs_column] * training_data[fcst_column].std()
+        + training_data[fcst_column].mean()
+    )
+    return training_data, fcst_column, obs_column, train_columns
+
+
+@pytest.fixture
+def dummy_lightgbm_models(ensemble_features, ensemble_forecast, error_thresholds):
+    import lightgbm
+
+    training_data, fcst_column, obs_column, train_columns = get_dummy_training_data(
+        ensemble_features, ensemble_forecast
+    )
+    # train a model for each threshold
+    tree_models = []
+    params = {"objective": "binary", "num_leaves": 5, "verbose": -1, "seed": 0}
+    training_columns = train_columns
+    for threshold in error_thresholds:
+        data = lightgbm.Dataset(
+            training_data[training_columns],
+            label=(
+                training_data[obs_column] - training_data[fcst_column] < threshold
+            ).astype(int),
+        )
+        booster = lightgbm.train(params, data, num_boost_round=10)
+        tree_models.append(booster)
+
+    return tree_models, error_thresholds
+
+
+@pytest.fixture
+def dummy_treelite_models(dummy_lightgbm_models, tmp_path):
+    import treelite
+    import treelite_runtime
+
+    lightgbm_models, error_thresholds = dummy_lightgbm_models
+    tree_models = []
+    for model in lightgbm_models:
+        treelite_model = treelite.Model.from_lightgbm(model)
+        treelite_model.export_lib(
+            toolchain="gcc",
+            libpath=str(tmp_path / "model.so"),
+            verbose=False,
+            params={"parallel_comp": 8, "quantize": 1},
+        )
+        predictor = treelite_runtime.Predictor(
+            str(tmp_path / "model.so"), verbose=True, nthread=1
+        )
+        tree_models.append(predictor)
+
+    return tree_models, error_thresholds

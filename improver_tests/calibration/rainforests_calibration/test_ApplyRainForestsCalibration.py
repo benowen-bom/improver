@@ -68,6 +68,21 @@ class MockPredictor:
         self.n_threads = nthread
 
 
+class InitialsedApplyRainForestCalibration(ApplyRainForestsCalibration):
+    def __init__(self, tree_models, error_thresholds):
+        self.tree_models = tree_models
+        self.error_thresholds = error_thresholds
+        self.treelite_enabled = (
+            True if importlib.util.find_spec("treelite") is not None else False
+        )
+
+
+@pytest.fixture
+def initalised_lightgbm_calibration(dummy_lightgbm_models):
+
+    return InitialsedApplyRainForestCalibration(*dummy_lightgbm_models)
+
+
 def test__init_lightgbm_models(monkeypatch, lightgbm_model_config, error_thresholds):
     """Test lightgbm models are loaded if model_config contains path to lightgbm models only."""
     monkeypatch.setattr(lightgbm, "Booster", MockBooster)
@@ -126,18 +141,17 @@ def test__init_treelite_missing(monkeypatch, treelite_model_config, error_thresh
 
 
 def test__align_feature_variables_ensemble(
-    monkeypatch, ensemble_features, ensemble_forecast, lightgbm_model_config
+    ensemble_features, ensemble_forecast, initalised_lightgbm_calibration
 ):
     """Check cube alignment when using feature and forecast variables when realization
     coordinate present in some cube variables."""
 
-    # For this test we will not be using tree-models, so we will override the
-    # initialisation of Class variables.
-    monkeypatch.setattr(lightgbm, "Booster", MockBooster)
-
-    (aligned_features, aligned_forecast,) = ApplyRainForestsCalibration(
-        lightgbm_model_config, nthreads=1
-    )._align_feature_variables(ensemble_features, ensemble_forecast)
+    (
+        aligned_features,
+        aligned_forecast,
+    ) = initalised_lightgbm_calibration._align_feature_variables(
+        ensemble_features, ensemble_forecast
+    )
 
     input_cubes = CubeList([*ensemble_features, ensemble_forecast])
     output_cubes = CubeList([*aligned_features, aligned_forecast])
@@ -160,17 +174,16 @@ def test__align_feature_variables_ensemble(
 
 
 def test__align_feature_variables_deterministic(
-    monkeypatch, deterministic_features, deterministic_forecast, lightgbm_model_config
+    deterministic_features, deterministic_forecast, initalised_lightgbm_calibration
 ):
     """Check cube alignment when using feature and forecast variables when no realization
     coordinate present in any of the cube variables."""
-    # For this test we will not be using tree-models, so we will override the
-    # initialisation of Class variables.
-    monkeypatch.setattr(lightgbm, "Booster", MockBooster)
-
-    (aligned_features, aligned_forecast,) = ApplyRainForestsCalibration(
-        lightgbm_model_config, nthreads=1
-    )._align_feature_variables(deterministic_features, deterministic_forecast)
+    (
+        aligned_features,
+        aligned_forecast,
+    ) = initalised_lightgbm_calibration._align_feature_variables(
+        deterministic_features, deterministic_forecast
+    )
 
     input_cubes = CubeList([*deterministic_features, deterministic_forecast])
     output_cubes = CubeList([*aligned_features, aligned_forecast])
@@ -196,12 +209,8 @@ def test__align_feature_variables_deterministic(
 
 
 def test__align_feature_variables_misaligned_dim_coords(
-    monkeypatch, ensemble_features, lightgbm_model_config
+    ensemble_features, initalised_lightgbm_calibration
 ):
-
-    # For this test we will not be using tree-models, so we will override the
-    # initialisation of Class variables.
-    monkeypatch.setattr(lightgbm, "Booster", MockBooster)
 
     misaligned_forecast_cube = set_up_variable_cube(
         np.maximum(0, np.random.normal(0.002, 0.001, (5, 10, 15))).astype(np.float32),
@@ -211,9 +220,9 @@ def test__align_feature_variables_misaligned_dim_coords(
     )
 
     with pytest.raises(ValueError):
-        ApplyRainForestsCalibration(
-            lightgbm_model_config, nthreads=1
-        )._align_feature_variables(ensemble_features, misaligned_forecast_cube)
+        initalised_lightgbm_calibration._align_feature_variables(
+            ensemble_features, misaligned_forecast_cube
+        )
 
     misaligned_forecast_cube = set_up_variable_cube(
         np.maximum(0, np.random.normal(0.002, 0.001, (10, 10, 10))).astype(np.float32),
@@ -223,9 +232,9 @@ def test__align_feature_variables_misaligned_dim_coords(
     )
 
     with pytest.raises(ValueError):
-        ApplyRainForestsCalibration(
-            lightgbm_model_config, nthreads=1
-        )._align_feature_variables(ensemble_features, misaligned_forecast_cube)
+        initalised_lightgbm_calibration._align_feature_variables(
+            ensemble_features, misaligned_forecast_cube
+        )
 
 
 @pytest.mark.parametrize(
@@ -233,23 +242,16 @@ def test__align_feature_variables_misaligned_dim_coords(
     [(None, True), (None, False), (0, True), (1, True)],
 )
 def test_add_coordinate(
-    monkeypatch,
     deterministic_forecast,
     new_dim_location,
     copy_metadata,
-    lightgbm_model_config,
+    initalised_lightgbm_calibration,
 ):
     """Test adding dimension to input_cube"""
 
-    # For this test we will not be using tree-models, so we will override the
-    # initialisation of Class variables.
-    monkeypatch.setattr(lightgbm, "Booster", MockBooster)
-
     realization_coord = DimCoord(np.arange(0, 5), standard_name="realization", units=1)
 
-    output_cube = ApplyRainForestsCalibration(
-        lightgbm_model_config, nthreads=1
-    )._add_coordinate_to_cube(
+    output_cube = initalised_lightgbm_calibration._add_coordinate_to_cube(
         deterministic_forecast,
         realization_coord,
         new_dim_location=new_dim_location,
