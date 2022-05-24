@@ -253,16 +253,9 @@ def test__calc_clearsky_ineichen(target_grid):
     )
 
 
-@pytest.mark.parametrize("_surface_altitude", [0.0, "surface_altitude"])
-@pytest.mark.parametrize("_linke_turbidity", [3.0, "linke_turbidity"])
 def test__calc_clearsky_solar_radiation_data(
-    request, target_grid, _surface_altitude, _linke_turbidity
+    target_grid, surface_altitude, linke_turbidity
 ):
-
-    if isinstance(_surface_altitude, str):
-        _surface_altitude = request.getfixturevalue(_surface_altitude).data
-    if isinstance(_linke_turbidity, str):
-        _linke_turbidity = request.getfixturevalue(_linke_turbidity).data
 
     irradiance_times = np.array(
         [
@@ -274,7 +267,7 @@ def test__calc_clearsky_solar_radiation_data(
     )
 
     result = GenerateClearskySolarRadiation()._calc_clearsky_solar_radiation_data(
-        target_grid, irradiance_times, _surface_altitude, _linke_turbidity, 30
+        target_grid, irradiance_times, surface_altitude.data, linke_turbidity.data, 60
     )
     # Check expected array properties
     assert result.shape == (10, 8)
