@@ -55,6 +55,9 @@ from improver.utilities.spatial import (
 
 DEFAULT_TEMPORAL_SPACING_IN_MINUTES = 30
 
+SOLAR_TIME_CF_NAME = "local_solar_time"
+SOLAR_TIME_BRUCE_NAME = "solar_time"
+
 CLEARSKY_SOLAR_RADIATION_CF_NAME = (
     "integral_of_surface_downwelling_shortwave_flux_in_air_assuming_clear_sky_wrt_time"
 )
@@ -63,6 +66,48 @@ CLEARSKY_SOLAR_RADIATION_BRUCE_NAME = "clearsky_solar_radiation"
 
 class GenerateSolarTime(BasePlugin):
     """A plugin to evaluate local solar time."""
+
+    def _create_solar_time_cube(
+        self, solar_time_data: ndarray, target_grid: Cube, time: datetime,
+    ) -> Cube:
+        """Create solar time cube for the specified valid time.
+
+        Args:
+            solar_time_data:
+                Solar time data.
+            target_grid:
+                Cube containing spatial grid over which the solar time has been
+                calculated.
+            time:
+                Time associated with the local solar time.
+
+        Returns:
+            Solar time data as an iris cube.
+        """
+        X_coord = target_grid.coord(axis="X")
+        Y_coord = target_grid.coord(axis="Y")
+
+        time_coord = AuxCoord(
+            np.array(time.replace(tzinfo=timezone.utc).timestamp(), dtype=np.int64),
+            standard_name="time",
+            units=cf_units.Unit(
+                "seconds since 1970-01-01 00:00:00 UTC",
+                calendar=cf_units.CALENDAR_STANDARD,
+            ),
+        )
+
+        attrs = generate_mandatory_attributes([target_grid])
+
+        solar_time_cube = Cube(
+            solar_time_data,
+            long_name=SOLAR_TIME_CF_NAME,
+            units="hours",
+            dim_coords_and_dims=[(Y_coord, 0), (X_coord, 1)],
+            aux_coords_and_dims=[(time_coord, None)],
+            attributes=attrs,
+        )
+
+        return solar_time_cube
 
     def process(self, target_grid: Cube, time: datetime) -> Cube:
         """Calculate the local solar time over the specified grid.
@@ -76,7 +121,13 @@ class GenerateSolarTime(BasePlugin):
         Returns:
             A cube containing local solar time, on the same spatial grid as target_grid.
         """
-        pass
+
+        solar_time_data = np.zeros(shape=target_grid.data.shape, dtype=np.float32)
+        solar_time_cube = self._create_solar_time_cube(
+            solar_time_data, target_grid, time
+        )
+
+        return solar_time_cube
 
 
 class GenerateClearskySolarRadiation(BasePlugin):
