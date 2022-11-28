@@ -216,7 +216,8 @@ class ApplySimpleBiasCorrection(BasePlugin):
         corrected_forecast = forecast.copy()
         corrected_forecast.data = self.correction_method(forecast, bias)
 
-        if lower_bound:
+        if lower_bound  is not None:
+
             below_lower_bound = corrected_forecast.data < lower_bound
             corrected_forecast.data[below_lower_bound] = lower_bound
 
