@@ -37,7 +37,13 @@ from improver import cli
 
 @cli.clizefy
 @cli.with_output
-def process(*cubes: cli.inputcube, truth_attribute: str):
+def process(
+    *cubes: cli.inputcube,
+    truth_attribute: str,
+    transform: str = None,
+    transform_alpha: float = None,
+    transform_beta: float = None,
+):
     """Calculate bias terms from from the specified forecast dataset.
 
     Args:
@@ -49,7 +55,13 @@ def process(*cubes: cli.inputcube, truth_attribute: str):
         truth_attribite (str):
             An attribute and its value in the format of "attribute=value",
             which must be present on truth cubes.
-
+        transform:
+            Name of transform method to use in calculating the forecast error.
+        transform_alpha:
+            Power paramter to use in transform.
+        transform_beta:
+            Shift parameter to use in transform. This value should be used if
+            data is not positive definite.
     Returns:
         iris.cube.Cube:
             Forecast cube with bias correction applied on a per member basis.
@@ -61,6 +73,8 @@ def process(*cubes: cli.inputcube, truth_attribute: str):
         cubes, truth_attribute
     )
 
-    plugin = CalculateForecastBias()
+    plugin = CalculateForecastBias(transform)
 
-    return plugin(historical_forecast, historical_truth)
+    return plugin(
+        historical_forecast, historical_truth, transform_alpha, transform_beta
+    )

@@ -30,10 +30,13 @@
 # POSSIBILITY OF SUCH DAMAGE.
 """Simple bias correction plugins."""
 
+from sqlite3 import NotSupportedError
 from typing import Dict, Optional
 
 import iris
+import numpy as np
 from iris.cube import Cube
+from numpy import ndarray
 
 from improver import BasePlugin
 from improver.calibration.utilities import (
@@ -47,6 +50,8 @@ from improver.metadata.utilities import (
 )
 from improver.utilities.cube_manipulation import collapsed, get_dim_coord_names
 
+FLOAT_TOLERANCE = 0.0001
+
 
 def mean_additive_error(forecasts, truths):
     """Evaluate the mean error between the forecast and truth dataset."""
@@ -59,17 +64,71 @@ def apply_additive_bias(forecast, bias):
     return forecast.data
 
 
+def power(data: ndarray, alpha: float, beta: float = 0) -> ndarray:
+    """Transform data using simple power transform.
+    Args:
+        data:
+            Data to transform.
+        alpha:
+            Power parameter to use in transform.
+        beta:
+            Shift parameter to use in transform. This value should be used if
+            data is not positive definite.
+    Returns:
+        transformed_data.
+    """
+    shifted_data = data + beta
+
+    if np.any(shifted_data <= 0):
+        raise ValueError("Simple power transforms require positive definite data.")
+
+    if alpha == 0:
+        return np.log(shifted_data)
+    else:
+        return np.sign(alpha) * shifted_data ** alpha
+
+
+def inverse_power(data: ndarray, alpha: float, beta: float = 0) -> ndarray:
+    """Apply inverse transform to data for simple power transform.
+    Args:
+        data:
+            Data to transform.
+        alpha:
+            Power parameter to use in transform.
+        beta:
+            Shift parameter to use in transform. This value should be used if
+            data is not positive definite.
+    Returns:
+        transformed_data.
+    """
+    if np.isclose(alpha, 0, atol=FLOAT_TOLERANCE):
+        return np.exp(data) - beta
+    else:
+        return (np.sign(alpha) * data) ** (1 / alpha) - beta
+
+
+TRANSFORM_METHODS = {
+    "power": (power, inverse_power),
+}
+
+
 class CalculateForecastBias(BasePlugin):
     """
     A plugin to evaluate the forecast bias from the historical forecast and truth
     value(s).
     """
 
-    def __init__(self):
+    def __init__(self, transform=None):
         """
         Initialise class for applying simple bias correction.
         """
         self.error_method = mean_additive_error
+        if transform is not None:
+            if transform in TRANSFORM_METHODS:
+                self.transform = TRANSFORM_METHODS[transform][0]
+                self.inverse_transform = TRANSFORM_METHODS[transform][1]
+            else:
+                raise NotSupportedError(f"Transform method: {transform} not supported.")
 
     def _define_metadata(self, forecast_slice: Cube) -> Dict[str, str]:
         """
@@ -143,7 +202,13 @@ class CalculateForecastBias(BasePlugin):
 
         return mean_bias
 
-    def process(self, historic_forecasts: Cube, truths: Cube):
+    def process(
+        self,
+        historic_forecasts: Cube,
+        truths: Cube,
+        transform_alpha: Optional[float],
+        transform_beta: Optional[float],
+    ):
         """
         Evaluate forecast error over the set of historic forecasts and associated
         truth values.
@@ -168,6 +233,10 @@ class CalculateForecastBias(BasePlugin):
         historic_forecasts, truths = filter_non_matching_cubes(
             historic_forecasts, truths
         )
+        if self.transform is not None:
+            historic_forecasts.data = self.transform(
+                historic_forecasts.data, transform_alpha, transform_beta
+            )
         # Ensure that input forecasts are for consitent period/valid-hour
         check_forecast_consistency(historic_forecasts)
         # Remove truth frt to enable cube maths
