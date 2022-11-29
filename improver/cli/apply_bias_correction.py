@@ -38,7 +38,12 @@ from improver import cli
 @cli.clizefy
 @cli.with_output
 def process(
-    forecast_cube: cli.inputcube, *bias_cubes: cli.inputcube, lower_bound: float = None
+    forecast_cube: cli.inputcube,
+    *bias_cubes: cli.inputcube,
+    lower_bound: float = None,
+    transform: str = None,
+    transform_alpha: float = None,
+    transform_beta: float = None,
 ):
     """Apply simple bias correction to ensemble members based on the bias from the
     reference forecast dataset.
@@ -52,7 +57,13 @@ def process(
             value will be taken over the forecast_reference_time coordinate.
         lower_bound (float):
             Specifies a lower bound below which values will be remapped to this value.
-
+        transform (str):
+            Name of transform method to use in calculating the forecast error.
+        transform_alpha (float):
+            Power paramter to use in transform.
+        transform_beta (float):
+            Shift parameter to use in transform. This value should be used if
+            data is not positive definite.
     Returns:
         iris.cube.Cube:
             Forecast cube with bias correction applied on a per member basis.
@@ -68,6 +79,8 @@ def process(
     if "forecast_reference_time" in get_dim_coord_names(bias_cube):
         bias_cube = collapsed(bias_cube, "forecast_reference_time", iris.analysis.MEAN)
 
-    plugin = ApplySimpleBiasCorrection()
+    plugin = ApplySimpleBiasCorrection(transform)
 
-    return plugin.process(forecast_cube, bias_cube, lower_bound)
+    return plugin.process(
+        forecast_cube, bias_cube, lower_bound, transform_alpha, transform_beta
+    )

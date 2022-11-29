@@ -55,11 +55,11 @@ def process(
         truth_attribite (str):
             An attribute and its value in the format of "attribute=value",
             which must be present on truth cubes.
-        transform:
+        transform (str):
             Name of transform method to use in calculating the forecast error.
-        transform_alpha:
+        transform_alpha (float):
             Power paramter to use in transform.
-        transform_beta:
+        transform_beta (float):
             Shift parameter to use in transform. This value should be used if
             data is not positive definite.
     Returns:

@@ -129,6 +129,9 @@ class CalculateForecastBias(BasePlugin):
                 self.inverse_transform = TRANSFORM_METHODS[transform][1]
             else:
                 raise NotSupportedError(f"Transform method: {transform} not supported.")
+        else:
+            self.transform = None
+            self.inverse_transform = None
 
     def _define_metadata(self, forecast_slice: Cube) -> Dict[str, str]:
         """
@@ -237,6 +240,7 @@ class CalculateForecastBias(BasePlugin):
             historic_forecasts.data = self.transform(
                 historic_forecasts.data, transform_alpha, transform_beta
             )
+            truths.data = self.transform(truths.data, transform_alpha, transform_beta)
         # Ensure that input forecasts are for consitent period/valid-hour
         check_forecast_consistency(historic_forecasts)
         # Remove truth frt to enable cube maths
@@ -255,13 +259,29 @@ class ApplySimpleBiasCorrection(BasePlugin):
     the specified bias terms.
     """
 
-    def __init__(self):
+    def __init__(self, transform=None):
         """
         Initialise class for applying simple bias correction.
         """
         self.correction_method = apply_additive_bias
+        if transform is not None:
+            if transform in TRANSFORM_METHODS:
+                self.transform = TRANSFORM_METHODS[transform][0]
+                self.inverse_transform = TRANSFORM_METHODS[transform][1]
+            else:
+                raise NotSupportedError(f"Transform method: {transform} not supported.")
+        else:
+            self.transform = None
+            self.inverse_transform = None
 
-    def process(self, forecast: Cube, bias: Cube, lower_bound: Optional[float]) -> Cube:
+    def process(
+        self,
+        forecast: Cube,
+        bias: Cube,
+        lower_bound: Optional[float],
+        transform_alpha: Optional[float],
+        transform_beta: Optional[float],
+    ) -> Cube:
         """
         Apply bias correction using the specified bias values.
 
@@ -283,7 +303,18 @@ class ApplySimpleBiasCorrection(BasePlugin):
             Bias corrected forecast cube.
         """
         corrected_forecast = forecast.copy()
-        corrected_forecast.data = self.correction_method(forecast, bias)
+
+        if self.transform is not None:
+            corrected_forecast.data = self.transform(
+                corrected_forecast.data, transform_alpha, transform_beta
+            )
+
+        corrected_forecast.data = self.correction_method(corrected_forecast, bias)
+
+        if self.transform is not None:
+            corrected_forecast.data = self.inverse_transform(
+                corrected_forecast.data, transform_alpha, transform_beta
+            )
 
         if lower_bound is not None:
 
