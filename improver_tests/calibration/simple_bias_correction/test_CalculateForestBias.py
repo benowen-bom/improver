@@ -28,3 +28,65 @@
 # CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
+
+from operator import truth
+import numpy as np
+
+from iris.cube import CubeList
+
+from datetime import datetime, timedelta
+
+from improver.calibration.simple_bias_correction import CalculateForecastBias
+from improver.synthetic_data.set_up_test_cubes import (
+    set_up_variable_cube,
+)
+
+ATTRIBUTES = {
+    "title": "Test forecast dataset",
+    "model_configuration" : "fcst_model",
+    "source": "IMPROVER",
+    "institution": "Australian Bureau of Meteorology",
+}
+
+VALID_TIME = datetime(2022, 12, 6, 3, 0)
+
+def generate_dataset(n_frt=1, truth_dataset=False):
+
+    attributes = ATTRIBUTES.copy()
+
+    times = [VALID_TIME - i * timedelta(days=1) for i in range(n_frt)]
+    if truth_dataset:
+        period = timedelta(hours=0)
+        attributes["title"] = "Test truth dataset"
+        attributes["model_configuration"] = "truth_data"
+    else:
+        period = timedelta(hours=3)
+    forecast_ref_times = {time : time - period for time in times}
+
+    rng = np.random.default_rng(0)
+    data_shape = (5, 10, 10)
+
+    ref_forecast_cubes = CubeList()
+    for time in times:
+        ref_forecast_cubes.append(set_up_variable_cube(
+            np.maximum(0, rng.normal(0.002, 0.001, data_shape)).astype(np.float32),
+            time=time,
+            frt=forecast_ref_times[time],
+            attributes=attributes,
+        ))
+    ref_forecast_cube = ref_forecast_cubes.merge_cube()
+
+    return ref_forecast_cube
+
+def reference_forecast_cube():
+    return generate_dataset()
+
+def reference_forecast_cubes():
+    return generate_dataset(4)
+
+def reference_truth_cube():
+    return generate_dataset(truth_dataset=True)
+
+def reference_forecast_cubes():
+    return generate_dataset(3, truth_dataset=True)
+
