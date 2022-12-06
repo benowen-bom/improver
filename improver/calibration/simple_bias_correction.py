@@ -86,7 +86,7 @@ class CalculateForecastBias(BasePlugin):
         """
         # NEED TO ESTABLISH WHAT ATTRIBUTES SHOULD BE USED FOR BIAS CUBES.
         attributes = generate_mandatory_attributes([forecast_slice])
-        attributes["title"] = "Forecast error data"
+        attributes["title"] = "Forecast bias data"
         return attributes
 
     def _create_bias_cube(self, forecasts: Cube):
@@ -103,45 +103,45 @@ class CalculateForecastBias(BasePlugin):
             the cube is the forecast error of the associated diagnostic.
         """
         attributes = self._define_metadata(forecasts)
-        # NEED TO ESTABLISH WHAT THE APPROPRIATE DIAGNOSTIC NAME SHOULD BE HERE.
         forecast_bias_cube = create_new_diagnostic_cube(
             name=f"{forecasts.name()} forecast error",
             units=forecasts.units,
             template_cube=forecasts,
             mandatory_attributes=attributes,
         )
+        # Collapse the time values down to a single value as mean value
+        # will be stored where multiple forecast_reference_times are passed in.
+        if "time" in get_dim_coord_names(forecast_bias_cube):
+            frt_coord = create_unified_frt_coord(
+                forecast_bias_cube.coord("forecast_reference_time")
+            )
+            forecast_bias_cube = collapsed(
+                forecast_bias_cube, "forecast_reference_time", iris.analysis.MEAN
+            )
+            forecast_bias_cube.data = forecast_bias_cube.data.astype(
+                forecast_bias_cube.dtype
+            )
+            forecast_bias_cube.replace_coord(frt_coord)
+        # Remove valid time in favour of frt coordinate
+        forecast_bias_cube.remove_coord("time")
 
         return forecast_bias_cube
 
-    def _collapse_time(self, bias: Cube):
-        """
-        Collapse the time dimension coordinate if present by taking the
-        mean value along this dimension.
+    # def _collapse_time(self, bias: Cube):
+    #     """
+    #     Collapse the time dimension coordinate if present by taking the
+    #     mean value along this dimension.
 
-        Args:
-            bias:
-                Cube containing the forecast error values.
+    #     Args:
+    #         bias:
+    #             Cube containing the forecast error values.
 
-        Returns:
-            Cube containing the mean forecast error over the range of
-            specified forecasts. A single forecast reference time is assigned
-            with the bounds reflecting the range of forecast times over which
-            the forecast error is evaluated.
-        """
-        # NEED TO ESTABLISH WHETHER FRT IS THE SUITABLE COORDINATE TO USE HERE.
-        # - this coord is flagged as deprecated
-        # - check what is used in reliability calibration
-        if "time" in get_dim_coord_names(bias):
-            frt_coord = create_unified_frt_coord(bias.coord("forecast_reference_time"))
-            mean_bias = collapsed(bias, "forecast_reference_time", iris.analysis.MEAN)
-            mean_bias.data = mean_bias.data.astype(bias.dtype)
-            mean_bias.replace_coord(frt_coord)
-        else:
-            mean_bias = bias
-        # Remove valid time in favour of frt coordinate
-        mean_bias.remove_coord("time")
-
-        return mean_bias
+    #     Returns:
+    #         Cube containing the mean forecast error over the range of
+    #         specified forecasts. A single forecast reference time is assigned
+    #         with the bounds reflecting the range of forecast times over which
+    #         the forecast error is evaluated.
+    #     """
 
     def process(self, historic_forecasts: Cube, truths: Cube):
         """
