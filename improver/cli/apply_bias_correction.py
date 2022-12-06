@@ -59,7 +59,7 @@ def process(
     """
     import iris
 
-    from improver.calibration.simple_bias_correction import ApplySimpleBiasCorrection
+    from improver.calibration.simple_bias_correction import ApplyBiasCorrection
     from improver.utilities.cube_manipulation import collapsed, get_dim_coord_names
 
     # Check whether bias data supplied, if not then return unadjusted input cube.
@@ -73,5 +73,5 @@ def process(
             bias_cube = collapsed(
                 bias_cube, "forecast_reference_time", iris.analysis.MEAN
             )
-        plugin = ApplySimpleBiasCorrection()
+        plugin = ApplyBiasCorrection()
         return plugin.process(forecast_cube, bias_cube, lower_bound)

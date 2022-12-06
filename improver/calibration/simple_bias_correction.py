@@ -48,13 +48,13 @@ from improver.metadata.utilities import (
 from improver.utilities.cube_manipulation import collapsed, get_dim_coord_names
 
 
-def mean_additive_error(forecasts, truths):
-    """Evaluate the mean error between the forecast and truth dataset."""
+def evaluate_additive_error(forecasts, truths):
+    """Evaluate the additive error between the forecast and truth dataset."""
     forecast_errors = forecasts - truths
     return forecast_errors.data
 
 
-def apply_additive_bias(forecast, bias):
+def apply_additive_correction(forecast, bias):
     forecast = forecast - bias
     return forecast.data
 
@@ -69,7 +69,7 @@ class CalculateForecastBias(BasePlugin):
         """
         Initialise class for applying simple bias correction.
         """
-        self.error_method = mean_additive_error
+        self.error_method = evaluate_additive_error
 
     def _define_metadata(self, forecast_slice: Cube) -> Dict[str, str]:
         """
@@ -89,7 +89,7 @@ class CalculateForecastBias(BasePlugin):
         attributes["title"] = "Forecast error data"
         return attributes
 
-    def _create_forecast_bias_cube(self, forecasts: Cube):
+    def _create_bias_cube(self, forecasts: Cube):
         """
         Create a cube to store the forecast bias data.
 
@@ -174,13 +174,13 @@ class CalculateForecastBias(BasePlugin):
         truths.remove_coord("forecast_reference_time")
 
         # Create template cube to store the forecast bias
-        bias = self._create_forecast_bias_cube(historic_forecasts)
+        bias = self._create_bias_cube(historic_forecasts)
         bias.data = self.error_method(historic_forecasts, truths)
         bias = self._collapse_time(bias)
         return bias
 
 
-class ApplySimpleBiasCorrection(BasePlugin):
+class ApplyBiasCorrection(BasePlugin):
     """
     A Plugin to apply a simple bias correction on a per member basis using
     the specified bias terms.
@@ -190,7 +190,7 @@ class ApplySimpleBiasCorrection(BasePlugin):
         """
         Initialise class for applying simple bias correction.
         """
-        self.correction_method = apply_additive_bias
+        self.correction_method = apply_additive_correction
 
     def process(self, forecast: Cube, bias: Cube, lower_bound: Optional[float]) -> Cube:
         """
