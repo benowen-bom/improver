@@ -43,15 +43,23 @@ def process(
     """Apply simple bias correction to ensemble members based on the bias from the
     reference forecast dataset.
 
+    The bias cube can either be passed in as a series of bias values for individual
+    forecasts (from which the mean value is evaluated), or as a single bias value
+    evaluated over a series of reference forecasts.
+
+    A lower bound can be set to ensure that corrected values are physically sensible
+    post-bias correction.
+
     Args:
         forecast_cube (iris.cube.Cube):
             Cube containing the forecast to apply bias correction to.
         bias_cubes (iris.cube.Cube or list of iris.cube.Cube):
             A cube or list of cubes containing forecast bias data over the a specified
-            set of forecast reference times. If a list of cubes is passed in, the mean
-            value will be taken over the forecast_reference_time coordinate.
+            set of forecast reference times. If a list of cubes is passed in, each cube
+            should represent the forecast error for a single forecast reference time; the
+            mean value will then be evaluated over the forecast_reference_time coordinate.
         lower_bound (float):
-            Specifies a lower bound below which values will be remapped to this value.
+            Specifies a lower bound below which values will be remapped to.
 
     Returns:
         iris.cube.Cube:
@@ -65,8 +73,6 @@ def process(
     if not bias_cubes:
         return forecast_cube
     else:
-        # If bias_cubes are specified as a list of forecast_reference_times, collapse
-        # the list over this coordinate.
         bias_cubes = iris.cube.CubeList(bias_cubes)
         plugin = ApplyBiasCorrection()
         return plugin.process(forecast_cube, bias_cubes, lower_bound)
