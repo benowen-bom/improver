@@ -115,7 +115,7 @@ class CalculateForecastBias(BasePlugin):
         """
         attributes = self._define_metadata(forecasts)
         forecast_bias_cube = create_new_diagnostic_cube(
-            name=f"{forecasts.name()} forecast error",
+            name=f"{forecasts.name()}_forecast_error",
             units=forecasts.units,
             template_cube=forecasts,
             mandatory_attributes=attributes,

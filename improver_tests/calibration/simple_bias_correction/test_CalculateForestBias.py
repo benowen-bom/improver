@@ -169,4 +169,43 @@ def test__create_bias_cube(num_frt):
     assert "time" not in get_coord_names(result)
 
     # Check variable name is as expected
-    assert result.long_name == f"{reference_forecast_cubes.name()} forecast error"
+    assert result.long_name == f"{reference_forecast_cubes.name()}_forecast_error"
+
+
+# Test case where we have a single or multiple reference forecasts, and single or multiple
+# truth values including case where num_truth_frt != num_fcst_frt.
+@pytest.mark.parametrize("num_fcst_frt", (1, 50))
+@pytest.mark.parametrize("num_truth_frt", (1, 48, 50))
+def test_process(num_fcst_frt, num_truth_frt):
+
+    reference_forecast_cubes = generate_dataset(num_fcst_frt)
+    truth_cubes = generate_dataset(num_truth_frt, truth_dataset=True)
+
+    result = CalculateForecastBias().process(reference_forecast_cubes, truth_cubes)
+
+    # Check that the values used in calculate mean bias are expected based on
+    # alignment of forecast/truth values. For this we will consider the bounds
+    # on the forecast_reference_time_coordinate.
+    if (num_fcst_frt == 1) or (num_truth_frt == 1):
+        expected_bounds = None
+    elif num_truth_frt != num_fcst_frt:
+        expected_bounds = [
+            reference_forecast_cubes.coord("forecast_reference_time").points[
+                num_fcst_frt - num_truth_frt
+            ],
+            reference_forecast_cubes.coord("forecast_reference_time").points[-1],
+        ]
+    else:
+        expected_bounds = [
+            reference_forecast_cubes.coord("forecast_reference_time").points[0],
+            reference_forecast_cubes.coord("forecast_reference_time").points[-1],
+        ]
+    assert np.all(result.coord("forecast_reference_time").bounds == expected_bounds)
+
+    # Check that dtypes match for input/output
+    assert result.dtype == reference_forecast_cubes.dtype
+
+    # Check that results are near zero
+    expected_tol = 0.2 if (num_truth_frt == 1 and num_fcst_frt > 1) else 0.05
+
+    assert np.allclose(result.data, 0.0, atol=expected_tol)
