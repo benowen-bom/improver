@@ -35,7 +35,10 @@ import numpy as np
 import pytest
 from iris.cube import CubeList
 
-from improver.calibration.simple_bias_correction import CalculateForecastBias
+from improver.calibration.simple_bias_correction import (
+    CalculateForecastBias,
+    evaluate_additive_error,
+)
 from improver.synthetic_data.set_up_test_cubes import set_up_variable_cube
 from improver.utilities.cube_manipulation import get_coord_names, get_dim_coord_names
 
@@ -49,7 +52,7 @@ ATTRIBUTES = {
 VALID_TIME = datetime(2022, 12, 6, 3, 0)
 
 
-def generate_dataset(num_frt=1, truth_dataset=False):
+def generate_dataset(num_frt=1, truth_dataset=False, data=None):
 
     attributes = ATTRIBUTES.copy()
 
@@ -63,13 +66,24 @@ def generate_dataset(num_frt=1, truth_dataset=False):
     forecast_ref_times = {time: time - period for time in times}
 
     rng = np.random.default_rng(0)
-    data_shape = (10, 10)
+
+    if data is None:
+        data_shape = (4, 3)
+        data = np.ones(shape=data_shape, dtype=np.float32)
+    else:
+        data_shape = data.shape
 
     ref_forecast_cubes = CubeList()
     for time in times:
+        if (num_frt > 1) and (not truth_dataset):
+            noise = rng.normal(0.0, 0.1, data_shape).astype(np.float32)
+            data_slice = data + noise
+        else:
+            data_slice = data
+
         ref_forecast_cubes.append(
             set_up_variable_cube(
-                np.maximum(0, rng.normal(0.002, 0.001, data_shape)).astype(np.float32),
+                data=data_slice,
                 time=time,
                 frt=forecast_ref_times[time],
                 attributes=attributes,
@@ -78,6 +92,25 @@ def generate_dataset(num_frt=1, truth_dataset=False):
     ref_forecast_cube = ref_forecast_cubes.merge_cube()
 
     return ref_forecast_cube
+
+
+@pytest.mark.parametrize("num_frt", (1, 30))
+def test_evaluate_additive_error(num_frt):
+
+    data = 273.0 + np.array(
+        [[1.0, 2.0, 2.0], [2.0, 1.0, 3.0], [3.0, 3.0, 3.0]], dtype=np.float32
+    )
+    diff = np.array(
+        [[0.0, 0.0, 0.0], [-1.0, 1.0, 0.0], [-2.0, 0.0, 1.0]], dtype=np.float32
+    )
+    truth_data = data - diff
+
+    historic_forecasts = generate_dataset(num_frt, data=data)
+    truths = generate_dataset(num_frt, truth_dataset=True, data=truth_data)
+    truths.remove_coord("forecast_reference_time")
+
+    result = evaluate_additive_error(historic_forecasts, truths, collapse_dim="time")
+    assert np.allclose(result, diff, atol=0.05)
 
 
 # Test case where we have a single or multiple reference forecasts.

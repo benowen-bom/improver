@@ -48,9 +48,14 @@ from improver.metadata.utilities import (
 from improver.utilities.cube_manipulation import collapsed, get_dim_coord_names
 
 
-def evaluate_additive_error(forecasts, truths):
+def evaluate_additive_error(forecasts, truths, collapse_dim):
     """Evaluate the additive error between the forecast and truth dataset."""
     forecast_errors = forecasts - truths
+    if collapse_dim in get_dim_coord_names(forecast_errors):
+        mean_forecast_error = collapsed(
+            forecast_errors, collapse_dim, iris.analysis.MEAN
+        )
+        return mean_forecast_error.data
     return forecast_errors.data
 
 
@@ -84,7 +89,6 @@ class CalculateForecastBias(BasePlugin):
             A dictionary of attributes that are appropriate for the forecast error
             (bias) cube.
         """
-        # NEED TO ESTABLISH WHAT ATTRIBUTES SHOULD BE USED FOR BIAS CUBES.
         attributes = generate_mandatory_attributes([forecast_slice])
         attributes["title"] = "Forecast bias data"
         return attributes
@@ -93,14 +97,21 @@ class CalculateForecastBias(BasePlugin):
         """
         Create a cube to store the forecast bias data.
 
+        Where multiple reference forecasts values are provided via forecasts,
+        the time dimension will be collapsed to a single value represented by
+        a single forecast reference time with bounds set using the range of
+        frt values present in forecasts.
+
         Args:
             forecasts:
                 Cube containing the reference forecasts to use in calculation
                 of forecast error.
 
         Returns:
-            A copy of the forecast cube with the attributes updated to reflect
-            the cube is the forecast error of the associated diagnostic.
+            A copy of the forecasts cube with the attributes updated to reflect
+            the cube is the forecast error of the associated diagnostic. If a time
+            dimension is present in the forecasts, this will be collapsed to a single
+            value.
         """
         attributes = self._define_metadata(forecasts)
         forecast_bias_cube = create_new_diagnostic_cube(
@@ -126,22 +137,6 @@ class CalculateForecastBias(BasePlugin):
         forecast_bias_cube.remove_coord("time")
 
         return forecast_bias_cube
-
-    # def _collapse_time(self, bias: Cube):
-    #     """
-    #     Collapse the time dimension coordinate if present by taking the
-    #     mean value along this dimension.
-
-    #     Args:
-    #         bias:
-    #             Cube containing the forecast error values.
-
-    #     Returns:
-    #         Cube containing the mean forecast error over the range of
-    #         specified forecasts. A single forecast reference time is assigned
-    #         with the bounds reflecting the range of forecast times over which
-    #         the forecast error is evaluated.
-    #     """
 
     def process(self, historic_forecasts: Cube, truths: Cube):
         """
@@ -175,8 +170,7 @@ class CalculateForecastBias(BasePlugin):
 
         # Create template cube to store the forecast bias
         bias = self._create_bias_cube(historic_forecasts)
-        bias.data = self.error_method(historic_forecasts, truths)
-        bias = self._collapse_time(bias)
+        bias.data = self.error_method(historic_forecasts, truths, collapse_dim="time")
         return bias
 
 
