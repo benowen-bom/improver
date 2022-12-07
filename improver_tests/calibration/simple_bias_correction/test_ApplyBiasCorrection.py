@@ -78,20 +78,40 @@ def forecast_cube():
 
 
 def generate_bias_cubelist(
-    num_bias_inputs, single_frt_with_bounds=False, last_valid_time=VALID_TIME
+    num_frts: int,
+    single_frt_with_bounds: bool = False,
+    last_valid_time: datetime = VALID_TIME,
 ):
+    """Generate sample bias CubeList for testing.
 
+    Args:
+        num_frts:
+            Number of forecast_reference_times to use in constructing the bias values.
+        single_frt_with_bounds:
+            Flag to specify whether to return a single (mean) bias value defined over
+            the set of frt values, or leave as multiple bias values defined over a single
+            frt.
+        last_valid_time:
+            The latest valid time to use in constructing the set of bias values. All
+            associated valid-times (and frts) are evaluated by stepping back day-by-day
+            num_frt times.
+
+    Returns:
+        CubeList containg the sample bias cubes.
+    """
     data = MEAN_BIAS_DATA
-
+    # Set the attributes to those expected for bias cube.
     attributes = ATTRIBUTES.copy()
     del attributes["model_configuration"]
     attributes["title"] = "Forecast bias data"
 
+    # Initialise random number generator for adding noise around MEAN_BIAS_DATA.
     rng = np.random.default_rng(0)
 
     bias_cubes = CubeList()
-    for i in range(num_bias_inputs):
-        if num_bias_inputs > 1:
+    for i in range(num_frts):
+        if num_frts > 1:
+            # Add noise when constructing multiple values
             noise = rng.normal(0.0, 0.1, (3, 3)).astype(np.float32)
             data_slice = data + noise
         else:
@@ -108,7 +128,8 @@ def generate_bias_cubelist(
         bias_cube.remove_coord("time")
         bias_cubes.append(bias_cube)
 
-    if single_frt_with_bounds and num_bias_inputs > 1:
+    # Collapse down frt coord if using mean bias value defined in single cube.
+    if single_frt_with_bounds and num_frts > 1:
         bias_cubes = bias_cubes.merge_cube()
         frt_coord = create_unified_frt_coord(
             bias_cubes.coord("forecast_reference_time")
@@ -125,7 +146,7 @@ def generate_bias_cubelist(
 
 @pytest.mark.parametrize("num_bias_inputs", (1, 30))
 def test_apply_additive_correction(forecast_cube, num_bias_inputs):
-
+    """Test the additive correction provides expected value."""
     bias_cube = generate_bias_cubelist(num_bias_inputs, single_frt_with_bounds=True)[0]
 
     expected = TEST_FCST_DATA - MEAN_BIAS_DATA
@@ -135,14 +156,14 @@ def test_apply_additive_correction(forecast_cube, num_bias_inputs):
 
 
 def test__init__():
-
+    """Test that the class functions are set to the expected values."""
     plugin = ApplyBiasCorrection()
     assert plugin.correction_method == apply_additive_correction
 
 
 @pytest.mark.parametrize("single_input_frt", (False, True))
 def test_get_mean_bias(single_input_frt):
-
+    """Test that mean value cube returned has expected properties."""
     input_cubelist = generate_bias_cubelist(30, single_frt_with_bounds=single_input_frt)
     result = ApplyBiasCorrection()._get_mean_bias(input_cubelist)
 
@@ -158,7 +179,9 @@ def test_get_mean_bias(single_input_frt):
 
 
 def test_get_mean_bias_fails_on_inconsistent_bounds():
-
+    """Test that get_mean_bias fails when passing in multiple bias values defined
+    over a range of forecast_reference_times."""
+    # Set up cube inputs defined over multiple frt values.
     input_cubelist = CubeList()
     input_cubelist.extend(generate_bias_cubelist(2, single_frt_with_bounds=True))
     input_cubelist.extend(
@@ -168,10 +191,10 @@ def test_get_mean_bias_fails_on_inconsistent_bounds():
             last_valid_time=VALID_TIME - timedelta(days=2),
         )
     )
-
     with pytest.raises(ValueError):
         ApplyBiasCorrection()._get_mean_bias(input_cubelist)
-
+    # Set up cube inputs with mixed definition: one over single frt, the other over
+    # multiple frt values.
     input_cubelist = CubeList()
     input_cubelist.extend(generate_bias_cubelist(2, single_frt_with_bounds=False))
     input_cubelist.extend(
@@ -181,7 +204,6 @@ def test_get_mean_bias_fails_on_inconsistent_bounds():
             last_valid_time=VALID_TIME - timedelta(days=2),
         )
     )
-
     with pytest.raises(ValueError):
         ApplyBiasCorrection()._get_mean_bias(input_cubelist)
 
@@ -190,24 +212,24 @@ def test_get_mean_bias_fails_on_inconsistent_bounds():
 @pytest.mark.parametrize("single_input_frt", (False, True))
 @pytest.mark.parametrize("lower_bound", (None, 1))
 def test_process(forecast_cube, num_bias_inputs, single_input_frt, lower_bound):
-
+    """Test process function over range of input types, with/without lower bound."""
     input_bias_cubelist = generate_bias_cubelist(
         num_bias_inputs, single_frt_with_bounds=single_input_frt
     )
     result = ApplyBiasCorrection().process(
         forecast_cube, input_bias_cubelist, lower_bound
     )
-
     expected = TEST_FCST_DATA - MEAN_BIAS_DATA
     if lower_bound is not None:
         expected = np.maximum(lower_bound, expected)
-
+    # Check values are as expected (within tolerance)
     assert np.allclose(result.data, expected, atol=0.05)
-    assert result.coords() == forecast_cube.coords()
-    assert result.attributes == forecast_cube.attributes
     assert result.dtype == forecast_cube.dtype
-
+    # Check variable metadata is consistent
     assert result.standard_name == forecast_cube.standard_name
     assert result.long_name == forecast_cube.long_name
     assert result.var_name == forecast_cube.var_name
     assert result.units == forecast_cube.units
+    # Check coords and attributes are consistent
+    assert result.coords() == forecast_cube.coords()
+    assert result.attributes == forecast_cube.attributes

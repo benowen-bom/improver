@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 import numpy as np
 import pytest
 from iris.cube import CubeList
+from numpy import ndarray
 
 from improver.calibration.simple_bias_correction import (
     CalculateForecastBias,
@@ -52,11 +53,25 @@ ATTRIBUTES = {
 VALID_TIME = datetime(2022, 12, 6, 3, 0)
 
 
-def generate_dataset(num_frt=1, truth_dataset=False, data=None):
+def generate_dataset(
+    num_frts: int = 1, truth_dataset: bool = False, data: ndarray = None
+):
+    """Generate sample input datasets.
 
+    Args:
+        num_frts:
+            Number of forecast_reference_times to use in constructing the dataset.
+        truth_dataset:
+            Flag to specify whether the dataset represents truth_dataset.
+        data:
+            Data values to pass into the resultant cube.
+
+    Returns:
+        Cube containing input dataset for calculating bias.
+    """
+    # Setup values around
     attributes = ATTRIBUTES.copy()
-
-    times = [VALID_TIME - i * timedelta(days=1) for i in range(num_frt)]
+    times = [VALID_TIME - i * timedelta(days=1) for i in range(num_frts)]
     if truth_dataset:
         period = timedelta(hours=0)
         attributes["title"] = "Test truth dataset"
@@ -64,18 +79,17 @@ def generate_dataset(num_frt=1, truth_dataset=False, data=None):
     else:
         period = timedelta(hours=3)
     forecast_ref_times = {time: time - period for time in times}
-
+    # Initialise random number generator for adding noise around data.
     rng = np.random.default_rng(0)
-
     if data is None:
         data_shape = (4, 3)
         data = np.ones(shape=data_shape, dtype=np.float32)
     else:
         data_shape = data.shape
-
+    # Construct the cubes.
     ref_forecast_cubes = CubeList()
     for time in times:
-        if (num_frt > 1) and (not truth_dataset):
+        if (num_frts > 1) and (not truth_dataset):
             noise = rng.normal(0.0, 0.1, data_shape).astype(np.float32)
             data_slice = data + noise
         else:
@@ -96,7 +110,7 @@ def generate_dataset(num_frt=1, truth_dataset=False, data=None):
 
 @pytest.mark.parametrize("num_frt", (1, 30))
 def test_evaluate_additive_error(num_frt):
-
+    """test additive error evaluation gives expected value (within tolerance)."""
     data = 273.0 + np.array(
         [[1.0, 2.0, 2.0], [2.0, 1.0, 3.0], [3.0, 3.0, 3.0]], dtype=np.float32
     )
@@ -116,7 +130,7 @@ def test_evaluate_additive_error(num_frt):
 # Test case where we have a single or multiple reference forecasts.
 @pytest.mark.parametrize("num_frt", (1, 4))
 def test__define_metadata(num_frt):
-
+    """Test the resultant metadata is as expected."""
     reference_forecast_cubes = generate_dataset(num_frt)
 
     expected = ATTRIBUTES.copy()
@@ -132,7 +146,7 @@ def test__define_metadata(num_frt):
 # Test case where we have a single or multiple reference forecasts.
 @pytest.mark.parametrize("num_frt", (1, 4))
 def test__create_bias_cube(num_frt):
-
+    """Test that the bias cube has the expected structure."""
     reference_forecast_cubes = generate_dataset(num_frt)
     result = CalculateForecastBias()._create_bias_cube(reference_forecast_cubes)
 
@@ -146,8 +160,8 @@ def test__create_bias_cube(num_frt):
 
     # dtypes are consistent
     assert reference_forecast_cubes.dtype == result.dtype
-
-    # Check that frt coord
+    # Check that frt coord has expected bounds and values (dependent on whether
+    # single or multiple historic forecasts are present).
     if num_frt > 1:
         assert (
             result.coord("forecast_reference_time").points
@@ -177,12 +191,11 @@ def test__create_bias_cube(num_frt):
 @pytest.mark.parametrize("num_fcst_frt", (1, 50))
 @pytest.mark.parametrize("num_truth_frt", (1, 48, 50))
 def test_process(num_fcst_frt, num_truth_frt):
-
+    """Test process function over a variations in number of historical forecasts and
+    truth values passed in."""
     reference_forecast_cubes = generate_dataset(num_fcst_frt)
     truth_cubes = generate_dataset(num_truth_frt, truth_dataset=True)
-
     result = CalculateForecastBias().process(reference_forecast_cubes, truth_cubes)
-
     # Check that the values used in calculate mean bias are expected based on
     # alignment of forecast/truth values. For this we will consider the bounds
     # on the forecast_reference_time_coordinate.
@@ -201,11 +214,10 @@ def test_process(num_fcst_frt, num_truth_frt):
             reference_forecast_cubes.coord("forecast_reference_time").points[-1],
         ]
     assert np.all(result.coord("forecast_reference_time").bounds == expected_bounds)
-
     # Check that dtypes match for input/output
     assert result.dtype == reference_forecast_cubes.dtype
-
     # Check that results are near zero
+    # Note: case of single truth value and multiple forecasts will have larger deviation
+    # from expected value, so here we use a larger tolerance.
     expected_tol = 0.2 if (num_truth_frt == 1 and num_fcst_frt > 1) else 0.05
-
     assert np.allclose(result.data, 0.0, atol=expected_tol)
