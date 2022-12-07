@@ -33,7 +33,7 @@
 from typing import Dict, Optional
 
 import iris
-from iris.cube import Cube
+from iris.cube import Cube, CubeList
 
 from improver import BasePlugin
 from improver.calibration.utilities import (
@@ -60,8 +60,8 @@ def evaluate_additive_error(forecasts, truths, collapse_dim):
 
 
 def apply_additive_correction(forecast, bias):
-    forecast = forecast - bias
-    return forecast.data
+    corrected_forecast = forecast - bias
+    return corrected_forecast.data
 
 
 class CalculateForecastBias(BasePlugin):
@@ -186,7 +186,28 @@ class ApplyBiasCorrection(BasePlugin):
         """
         self.correction_method = apply_additive_correction
 
-    def process(self, forecast: Cube, bias: Cube, lower_bound: Optional[float]) -> Cube:
+    def _get_mean_bias(self, bias_values):
+        """
+        
+        """
+        # Currently only support for cases where the input bias_values are defined
+        # over a single forecast_reference_time.
+        if len(bias_values) == 1:
+            return bias_values[0]
+        else:
+            for bias_cube in bias_values:
+                if bias_cube.coord("forecast_reference_time").bounds is not None:
+                    raise ValueError(
+                        "Collapsing multiple bias values to a mean value is unsupported for "
+                        "bias values defined over multiple reference forecast values."
+                    )
+            bias_values = bias_values.merge_cube()
+            mean_bias = collapsed(
+                bias_values, "forecast_reference_time", iris.analysis.MEAN
+            )
+            return mean_bias
+
+    def process(self, forecast: Cube, bias: CubeList, lower_bound: Optional[float]) -> Cube:
         """
         Apply bias correction using the specified bias values.
 
@@ -207,10 +228,12 @@ class ApplyBiasCorrection(BasePlugin):
         Returns:
             Bias corrected forecast cube.
         """
+        bias = self._get_mean_bias(bias)
+
         corrected_forecast = forecast.copy()
         corrected_forecast.data = self.correction_method(forecast, bias)
 
-        if lower_bound:
+        if lower_bound is not None:
             below_lower_bound = corrected_forecast.data < lower_bound
             corrected_forecast.data[below_lower_bound] = lower_bound
 
